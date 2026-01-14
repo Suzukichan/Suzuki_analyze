@@ -92,7 +92,7 @@ if st.button("60日分の株価データを取得"):
             st.warning(f"{ticker} 取得失敗: {e}")
 
         progress.progress((i + 1) / total)
-        time.sleep(0.2)
+        time.sleep(0.4)
 
     progress.empty()
     status.empty()
@@ -201,3 +201,4 @@ if price_df is not None and not price_df.empty:
         st.dataframe(pd.DataFrame(results), use_container_width=True)
 else:
     st.info("株価データ取得後に分析機能が有効になります")
+
