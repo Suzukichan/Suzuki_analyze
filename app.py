@@ -15,7 +15,7 @@ st.title("株価分析アプリ")
 # =========================
 # 定数
 # =========================
-CODE_FILE = "銘柄リスト_test.csv"
+CODE_FILE = "銘柄リスト.csv"
 PRICE_FILE = "tse_price_60days.csv"
 PERIOD = "90d"
 
@@ -169,3 +169,4 @@ if st.button("セクター内分析を実行"):
         rows.append(row)
 
     st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
