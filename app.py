@@ -15,7 +15,7 @@ st.title("株価分析アプリ（試作）")
 # =========================
 # 定数
 # =========================
-CODE_FILE = "銘柄リスト_test.csv"   # ← 本番時は 銘柄リスト.csv に戻す
+CODE_FILE = "銘柄リスト.csv"   # ← 本番時は 銘柄リスト.csv に戻す
 PRICE_FILE = "tse_price_60days.csv"
 PERIOD = "90d"
 
@@ -199,3 +199,4 @@ if st.button("セクター内分析を実行"):
 
     st.success("セクター内分析が完了しました")
     st.dataframe(pd.DataFrame(results), use_container_width=True)
+
