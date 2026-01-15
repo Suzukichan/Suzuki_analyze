@@ -4,9 +4,6 @@ import numpy as np
 import yfinance as yf
 from sklearn.linear_model import LinearRegression
 
-# =========================
-# 基本設定
-# =========================
 st.set_page_config(page_title="株式セクター分析", layout="wide")
 
 PERIOD = "6mo"
@@ -14,17 +11,40 @@ INTERVAL = "1d"
 WINDOWS = [5, 20, 60]
 
 # =========================
-# データ読み込み
+# 銘柄リスト読込（堅牢版）
 # =========================
 @st.cache_data
 def load_stock_list(csv_path):
-    return pd.read_csv(csv_path)
+    df = pd.read_csv(csv_path)
+
+    # 列名正規化
+    rename_map = {
+        "銘柄コード": "Code",
+        "code": "Code",
+        "ticker": "Code",
+        "銘柄名": "Name",
+        "name": "Name",
+        "セクター": "Sector",
+        "sector": "Sector"
+    }
+
+    df = df.rename(columns=rename_map)
+
+    required = {"Code", "Name", "Sector"}
+    missing = required - set(df.columns)
+
+    if missing:
+        raise ValueError(f"銘柄リストCSVに必要な列が不足しています: {missing}")
+
+    df["Code"] = df["Code"].astype(str)
+    return df
 
 # =========================
 # 株価取得
 # =========================
 def fetch_price_data(codes):
     dfs = []
+
     for code in codes:
         try:
             df = yf.download(
@@ -35,9 +55,11 @@ def fetch_price_data(codes):
             )
             if df.empty:
                 continue
+
             df = df.reset_index()
             df["Code"] = code
             dfs.append(df)
+
         except Exception:
             continue
 
@@ -53,25 +75,23 @@ def calculate_indicators(price_df):
     price_df = price_df.copy()
     price_df["Close"] = pd.to_numeric(price_df["Close"], errors="coerce")
 
-    # ROC（ValueError 回避）
     price_df["ROC"] = (
         price_df
         .groupby("Code")["Close"]
         .transform(lambda x: x.pct_change())
     )
 
-    results = []
+    rows = []
 
     for window in WINDOWS:
-        ma_col = f"MA_{window}"
-        price_df[ma_col] = (
+        price_df[f"MA_{window}"] = (
             price_df
             .groupby("Code")["Close"]
             .transform(lambda x: x.rolling(window).mean())
         )
 
         for code, g in price_df.groupby("Code"):
-            g = g.dropna(subset=[ma_col])
+            g = g.dropna(subset=[f"MA_{window}"])
             if len(g) < window:
                 continue
 
@@ -80,17 +100,16 @@ def calculate_indicators(price_df):
 
             model = LinearRegression()
             model.fit(x, y)
-            r2 = model.score(x, y)
 
-            results.append({
+            rows.append({
                 "Code": code,
                 "Window": window,
-                "MA": g[ma_col].iloc[-1],
+                "MA": g[f"MA_{window}"].iloc[-1],
                 "RS": g["ROC"].iloc[-window:].mean(),
-                "R2": r2
+                "R2": model.score(x, y)
             })
 
-    return pd.DataFrame(results)
+    return pd.DataFrame(rows)
 
 # =========================
 # セクター比較（1セクター1行）
@@ -98,7 +117,7 @@ def calculate_indicators(price_df):
 def sector_comparison(indicator_df, stock_df):
     merged = indicator_df.merge(stock_df, on="Code")
 
-    rows = []
+    result = []
     for sector, g in merged.groupby("Sector"):
         row = {"Sector": sector}
         for w in WINDOWS:
@@ -106,9 +125,9 @@ def sector_comparison(indicator_df, stock_df):
             row[f"{w}日_MA"] = sub["MA"].mean()
             row[f"{w}日_RS"] = sub["RS"].mean()
             row[f"{w}日_R2"] = sub["R2"].mean()
-        rows.append(row)
+        result.append(row)
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(result)
 
 # =========================
 # セクター内分析（1銘柄1行）
@@ -135,15 +154,19 @@ def sector_detail(indicator_df, stock_df, sector):
 # =========================
 # UI
 # =========================
-st.title("📊 株式セクター分析アプリ")
+st.title("株式セクター分析")
 
 csv_file = st.selectbox(
     "銘柄リストを選択",
     ["銘柄リスト_test.csv", "銘柄リスト.csv"]
 )
 
-if st.button("▶ データ取得・分析実行"):
-    stock_df = load_stock_list(csv_file)
+if st.button("▶ 実行"):
+    try:
+        stock_df = load_stock_list(csv_file)
+    except Exception as e:
+        st.error(str(e))
+        st.stop()
 
     st.info("株価データ取得中...")
     price_df = fetch_price_data(stock_df["Code"].unique())
@@ -152,22 +175,13 @@ if st.button("▶ データ取得・分析実行"):
         st.error("株価データを取得できませんでした")
         st.stop()
 
-    st.info("指標計算中...")
     indicator_df = calculate_indicators(price_df)
 
-    st.success("分析完了")
-
-    # セクター比較
-    st.subheader("📈 セクター比較")
+    st.subheader("セクター比較")
     sector_df = sector_comparison(indicator_df, stock_df)
     st.dataframe(sector_df, use_container_width=True)
 
-    # セクター内分析
-    st.subheader("🔍 セクター内分析")
-    selected_sector = st.selectbox(
-        "セクターを選択",
-        sector_df["Sector"].unique()
-    )
-
-    detail_df = sector_detail(indicator_df, stock_df, selected_sector)
+    st.subheader("セクター内分析")
+    sector = st.selectbox("セクター選択", sector_df["Sector"])
+    detail_df = sector_detail(indicator_df, stock_df, sector)
     st.dataframe(detail_df, use_container_width=True)
