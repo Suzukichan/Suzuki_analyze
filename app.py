@@ -15,7 +15,7 @@ st.title("株価分析アプリ（試作）")
 # =========================
 # 定数
 # =========================
-CODE_FILE = "銘柄リスト.csv"
+CODE_FILE = "銘柄リスト_test.csv"
 PRICE_FILE = "tse_price_60days.csv"
 PERIOD = "90d"
 
@@ -201,4 +201,5 @@ if price_df is not None and not price_df.empty:
         st.dataframe(pd.DataFrame(results), use_container_width=True)
 else:
     st.info("株価データ取得後に分析機能が有効になります")
+
 
