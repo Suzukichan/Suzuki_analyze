@@ -15,7 +15,7 @@ st.title("株価分析アプリ")
 # =========================
 # 定数
 # =========================
-CODE_FILE = "銘柄リスト_test.csv"
+CODE_FILE = "銘柄リスト.csv"
 PRICE_FILE = "tse_price_60days.csv"
 PERIOD = "90d"
 
@@ -48,6 +48,11 @@ if not required_cols.issubset(code_df.columns):
 
 code_df = code_df[code_df["有効"] == 1].copy()
 code_df["銘柄コード"] = code_df["銘柄コード"].astype(str)
+
+# 銘柄名参照用辞書
+code_name_map = dict(
+    zip(code_df["銘柄コード"], code_df["銘柄名"])
+)
 
 # =========================
 # 株価データ取得
@@ -121,19 +126,11 @@ if not expected_cols.issubset(price_df.columns):
 
 price_df["Date"] = pd.to_datetime(price_df["Date"], errors="coerce")
 price_df = price_df.dropna(subset=["Date"])
-
 price_df["Code"] = price_df["Code"].astype(str)
-price_df["Close"] = pd.to_numeric(price_df["Close"], errors="coerce")
-price_df["Volume"] = pd.to_numeric(price_df["Volume"], errors="coerce")
-
 price_df = price_df.sort_values(["Code", "Date"])
 
-# ROC（Series保証）
-price_df["ROC"] = (
-    price_df
-    .groupby("Code")["Close"]
-    .pct_change()
-)
+# 騰落率（ROC）
+price_df["ROC"] = price_df.groupby("Code")["Close"].pct_change()
 
 # =========================
 # セクター比較分析（1セクター1行）
@@ -149,11 +146,12 @@ if st.button("セクター比較を実行"):
         for w in [5, 20, 60]:
             tmp = df_s.groupby("Code").tail(w)
 
-            ma = tmp.groupby("Code")["Close"].mean().mean()
-            rs = tmp.groupby("Code")["ROC"].mean().mean()
+            # 騰落率ベース移動平均
+            ma = tmp.groupby("Code")["ROC"].mean().mean()
+            rs = ma  # 相対強度＝平均ROC
 
             slope, r2 = calc_slope_r2(
-                tmp.groupby("Date")["Close"].mean()
+                tmp.groupby("Date")["ROC"].mean()
             )
 
             row[f"{w}日移動平均"] = ma
@@ -192,15 +190,19 @@ if st.button("セクター内分析を実行"):
     for code, g in df_f.groupby("Code"):
         g = g.sort_values("Date")
 
-        row = {"銘柄コード": code}
+        row = {
+            "銘柄コード": code,
+            "銘柄名": code_name_map.get(code, "")
+        }
 
         for w in [5, 20, 60]:
             roc = g["ROC"].tail(w)
-            ma = g["Close"].tail(w).mean()
+
+            ma = roc.mean()
             slope, r2 = calc_slope_r2(roc)
 
             row[f"{w}日移動平均"] = ma
-            row[f"{w}日相対強度"] = roc.mean()
+            row[f"{w}日相対強度"] = ma
             row[f"{w}日決定係数"] = r2
 
         if len(g) >= 5:
@@ -215,4 +217,3 @@ if st.button("セクター内分析を実行"):
 
     st.success("セクター内分析が完了しました")
     st.dataframe(pd.DataFrame(rows), use_container_width=True)
-
