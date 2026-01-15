@@ -11,30 +11,21 @@ INTERVAL = "1d"
 WINDOWS = [5, 20, 60]
 
 # =========================
-# 銘柄リスト読込（堅牢版）
+# 銘柄リスト読込
 # =========================
 @st.cache_data
 def load_stock_list(csv_path):
     df = pd.read_csv(csv_path)
 
-    # 列名正規化
-    rename_map = {
+    df = df.rename(columns={
         "銘柄コード": "Code",
-        "code": "Code",
-        "ticker": "Code",
         "銘柄名": "Name",
-        "name": "Name",
-        "セクター": "Sector",
-        "sector": "Sector"
-    }
-
-    df = df.rename(columns=rename_map)
+        "セクター": "Sector"
+    })
 
     required = {"Code", "Name", "Sector"}
-    missing = required - set(df.columns)
-
-    if missing:
-        raise ValueError(f"銘柄リストCSVに必要な列が不足しています: {missing}")
+    if not required.issubset(df.columns):
+        raise ValueError("銘柄リストCSVの列構成が不正です")
 
     df["Code"] = df["Code"].astype(str)
     return df
@@ -44,7 +35,6 @@ def load_stock_list(csv_path):
 # =========================
 def fetch_price_data(codes):
     dfs = []
-
     for code in codes:
         try:
             df = yf.download(
@@ -55,11 +45,9 @@ def fetch_price_data(codes):
             )
             if df.empty:
                 continue
-
             df = df.reset_index()
             df["Code"] = code
             dfs.append(df)
-
         except Exception:
             continue
 
@@ -95,8 +83,8 @@ def calculate_indicators(price_df):
             if len(g) < window:
                 continue
 
-            y = g["Close"].values.reshape(-1, 1)
-            x = np.arange(len(y)).reshape(-1, 1)
+            x = np.arange(len(g)).reshape(-1, 1)
+            y = g["Close"].values
 
             model = LinearRegression()
             model.fit(x, y)
@@ -112,12 +100,12 @@ def calculate_indicators(price_df):
     return pd.DataFrame(rows)
 
 # =========================
-# セクター比較（1セクター1行）
+# セクター比較
 # =========================
 def sector_comparison(indicator_df, stock_df):
     merged = indicator_df.merge(stock_df, on="Code")
+    rows = []
 
-    result = []
     for sector, g in merged.groupby("Sector"):
         row = {"Sector": sector}
         for w in WINDOWS:
@@ -125,12 +113,12 @@ def sector_comparison(indicator_df, stock_df):
             row[f"{w}日_MA"] = sub["MA"].mean()
             row[f"{w}日_RS"] = sub["RS"].mean()
             row[f"{w}日_R2"] = sub["R2"].mean()
-        result.append(row)
+        rows.append(row)
 
-    return pd.DataFrame(result)
+    return pd.DataFrame(rows)
 
 # =========================
-# セクター内分析（1銘柄1行）
+# セクター内分析
 # =========================
 def sector_detail(indicator_df, stock_df, sector):
     merged = indicator_df.merge(stock_df, on="Code")
@@ -144,6 +132,8 @@ def sector_detail(indicator_df, stock_df, sector):
         }
         for w in WINDOWS:
             sub = g[g["Window"] == w]
+            if sub.empty:
+                continue
             row[f"{w}日_MA"] = sub["MA"].values[0]
             row[f"{w}日_RS"] = sub["RS"].values[0]
             row[f"{w}日_R2"] = sub["R2"].values[0]
@@ -157,31 +147,34 @@ def sector_detail(indicator_df, stock_df, sector):
 st.title("株式セクター分析")
 
 csv_file = st.selectbox(
-    "銘柄リストを選択",
+    "銘柄リスト選択",
     ["銘柄リスト_test.csv", "銘柄リスト.csv"]
 )
 
 if st.button("▶ 実行"):
-    try:
-        stock_df = load_stock_list(csv_file)
-    except Exception as e:
-        st.error(str(e))
-        st.stop()
+    stock_df = load_stock_list(csv_file)
 
-    st.info("株価データ取得中...")
+    st.info("株価取得中…")
     price_df = fetch_price_data(stock_df["Code"].unique())
 
     if price_df.empty:
-        st.error("株価データを取得できませんでした")
+        st.error("株価データを取得できませんでした（RateLimitの可能性）")
         st.stop()
 
     indicator_df = calculate_indicators(price_df)
 
     st.subheader("セクター比較")
     sector_df = sector_comparison(indicator_df, stock_df)
+
+    if sector_df.empty:
+        st.error("セクター比較結果が空です")
+        st.stop()
+
     st.dataframe(sector_df, use_container_width=True)
 
+    sector_list = sector_df["Sector"].dropna().tolist()
+    sector = st.selectbox("セクター選択", sector_list)
+
     st.subheader("セクター内分析")
-    sector = st.selectbox("セクター選択", sector_df["Sector"])
     detail_df = sector_detail(indicator_df, stock_df, sector)
     st.dataframe(detail_df, use_container_width=True)
