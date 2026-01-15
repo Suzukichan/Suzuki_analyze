@@ -5,6 +5,7 @@ import yfinance as yf
 from sklearn.linear_model import LinearRegression
 
 st.set_page_config(page_title="株式セクター分析", layout="wide")
+st.title("株式セクター分析")
 
 PERIOD = "6mo"
 INTERVAL = "1d"
@@ -23,18 +24,15 @@ def load_stock_list(csv_path):
         "セクター": "Sector"
     })
 
-    required = {"Code", "Name", "Sector"}
-    if not required.issubset(df.columns):
-        raise ValueError("銘柄リストCSVの列構成が不正です")
-
     df["Code"] = df["Code"].astype(str)
-    return df
+    return df[["Code", "Name", "Sector"]]
 
 # =========================
 # 株価取得
 # =========================
 def fetch_price_data(codes):
     dfs = []
+
     for code in codes:
         try:
             df = yf.download(
@@ -45,13 +43,15 @@ def fetch_price_data(codes):
             )
             if df.empty:
                 continue
+
             df = df.reset_index()
             df["Code"] = code
             dfs.append(df)
+
         except Exception:
             continue
 
-    if not dfs:
+    if len(dfs) == 0:
         return pd.DataFrame()
 
     return pd.concat(dfs, ignore_index=True)
@@ -71,29 +71,26 @@ def calculate_indicators(price_df):
 
     rows = []
 
-    for window in WINDOWS:
-        price_df[f"MA_{window}"] = (
-            price_df
-            .groupby("Code")["Close"]
-            .transform(lambda x: x.rolling(window).mean())
-        )
+    for code, g in price_df.groupby("Code"):
+        g = g.dropna()
 
-        for code, g in price_df.groupby("Code"):
-            g = g.dropna(subset=[f"MA_{window}"])
-            if len(g) < window:
+        for w in WINDOWS:
+            if len(g) < w:
                 continue
 
-            x = np.arange(len(g)).reshape(-1, 1)
-            y = g["Close"].values
+            ma = g["Close"].rolling(w).mean().iloc[-1]
+            rs = g["ROC"].tail(w).mean()
 
-            model = LinearRegression()
-            model.fit(x, y)
+            x = np.arange(w).reshape(-1, 1)
+            y = g["Close"].tail(w).values
+
+            model = LinearRegression().fit(x, y)
 
             rows.append({
                 "Code": code,
-                "Window": window,
-                "MA": g[f"MA_{window}"].iloc[-1],
-                "RS": g["ROC"].iloc[-window:].mean(),
+                "Window": w,
+                "MA": ma,
+                "RS": rs,
                 "R2": model.score(x, y)
             })
 
@@ -102,9 +99,10 @@ def calculate_indicators(price_df):
 # =========================
 # セクター比較
 # =========================
-def sector_comparison(indicator_df, stock_df):
-    merged = indicator_df.merge(stock_df, on="Code")
-    rows = []
+def sector_comparison(ind_df, stock_df):
+    merged = ind_df.merge(stock_df, on="Code", how="inner")
+
+    result = []
 
     for sector, g in merged.groupby("Sector"):
         row = {"Sector": sector}
@@ -113,18 +111,19 @@ def sector_comparison(indicator_df, stock_df):
             row[f"{w}日_MA"] = sub["MA"].mean()
             row[f"{w}日_RS"] = sub["RS"].mean()
             row[f"{w}日_R2"] = sub["R2"].mean()
-        rows.append(row)
+        result.append(row)
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(result)
 
 # =========================
 # セクター内分析
 # =========================
-def sector_detail(indicator_df, stock_df, sector):
-    merged = indicator_df.merge(stock_df, on="Code")
+def sector_detail(ind_df, stock_df, sector):
+    merged = ind_df.merge(stock_df, on="Code", how="inner")
     merged = merged[merged["Sector"] == sector]
 
     rows = []
+
     for code, g in merged.groupby("Code"):
         row = {
             "Code": code,
@@ -132,11 +131,10 @@ def sector_detail(indicator_df, stock_df, sector):
         }
         for w in WINDOWS:
             sub = g[g["Window"] == w]
-            if sub.empty:
-                continue
-            row[f"{w}日_MA"] = sub["MA"].values[0]
-            row[f"{w}日_RS"] = sub["RS"].values[0]
-            row[f"{w}日_R2"] = sub["R2"].values[0]
+            if not sub.empty:
+                row[f"{w}日_MA"] = sub["MA"].iloc[0]
+                row[f"{w}日_RS"] = sub["RS"].iloc[0]
+                row[f"{w}日_R2"] = sub["R2"].iloc[0]
         rows.append(row)
 
     return pd.DataFrame(rows)
@@ -144,8 +142,6 @@ def sector_detail(indicator_df, stock_df, sector):
 # =========================
 # UI
 # =========================
-st.title("株式セクター分析")
-
 csv_file = st.selectbox(
     "銘柄リスト選択",
     ["銘柄リスト_test.csv", "銘柄リスト.csv"]
@@ -154,11 +150,11 @@ csv_file = st.selectbox(
 if st.button("▶ 実行"):
     stock_df = load_stock_list(csv_file)
 
-    st.info("株価取得中…")
-    price_df = fetch_price_data(stock_df["Code"].unique())
+    st.info("株価データ取得中…")
+    price_df = fetch_price_data(stock_df["Code"].tolist())
 
     if price_df.empty:
-        st.error("株価データを取得できませんでした（RateLimitの可能性）")
+        st.error("株価データを取得できませんでした")
         st.stop()
 
     indicator_df = calculate_indicators(price_df)
@@ -172,7 +168,13 @@ if st.button("▶ 実行"):
 
     st.dataframe(sector_df, use_container_width=True)
 
-    sector_list = sector_df["Sector"].dropna().tolist()
+    # 🔒 selectbox 防御
+    sector_list = sector_df["Sector"].dropna().astype(str).tolist()
+
+    if len(sector_list) == 0:
+        st.error("選択可能なセクターがありません")
+        st.stop()
+
     sector = st.selectbox("セクター選択", sector_list)
 
     st.subheader("セクター内分析")
