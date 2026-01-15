@@ -1,202 +1,176 @@
-import os
-import time
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import numpy as np
 import yfinance as yf
+from datetime import datetime, timedelta
 from sklearn.linear_model import LinearRegression
 
 # =========================
-# Streamlit設定
+# 基本設定
 # =========================
-st.set_page_config(page_title="株価分析アプリ", layout="wide")
-st.title("株価分析アプリ（試作）")
+st.set_page_config(page_title="株価・セクター分析", layout="wide")
+st.title("株価分析アプリ（セクター比較・セクター内分析）")
+
+PRICE_PERIOD = "6mo"
+PRICE_INTERVAL = "1d"
 
 # =========================
-# 定数
+# 関数定義
 # =========================
-CODE_FILE = "銘柄リスト.csv"   # ← 本番時は 銘柄リスト.csv に戻す
-PRICE_FILE = "tse_price_60days.csv"
-PERIOD = "90d"
+@st.cache_data(show_spinner=False)
+def load_price(code):
+    ticker = yf.Ticker(f"{code}.T")
+    df = ticker.history(period=PRICE_PERIOD, interval=PRICE_INTERVAL)
+    if df.empty:
+        return None
+    df = df.reset_index()
+    df["Code"] = code
+    return df
 
-# =========================
-# 共通関数
-# =========================
-def calc_trend_r2(series: pd.Series):
+def calc_trend_r2(series):
     series = series.dropna()
-    if len(series) < 2:
+    if len(series) < 3:
         return np.nan, np.nan
-    y = series.values
-    x = np.arange(len(y)).reshape(-1, 1)
-    model = LinearRegression().fit(x, y)
-    return model.coef_[0], model.score(x, y)
+
+    x = np.arange(len(series)).reshape(-1, 1)
+    y = series.values.reshape(-1, 1)
+
+    model = LinearRegression()
+    model.fit(x, y)
+
+    slope = model.coef_[0][0]
+    r2 = model.score(x, y)
+
+    return slope, r2
 
 # =========================
 # 銘柄リスト読み込み
 # =========================
-if not os.path.exists(CODE_FILE):
-    st.error(f"{CODE_FILE} が見つかりません")
-    st.stop()
+st.sidebar.header("① 銘柄リスト設定")
 
-code_df = pd.read_csv(CODE_FILE)
+csv_file = st.sidebar.selectbox(
+    "使用する銘柄リスト",
+    ["銘柄リスト.csv", "銘柄リスト_test.csv"]
+)
 
-required_cols = {"銘柄コード", "銘柄名", "市場区分", "セクター", "有効"}
-if not required_cols.issubset(code_df.columns):
-    st.error("銘柄リストの列構成が不正です")
-    st.write(code_df.columns.tolist())
-    st.stop()
+codes_df = pd.read_csv(csv_file)
 
-code_df = code_df[code_df["有効"] == 1].copy()
-code_df["銘柄コード"] = code_df["銘柄コード"].astype(str)
+codes_df["銘柄コード"] = codes_df["銘柄コード"].astype(str)
+
+# 市場区分フィルタ
+market_filters = st.sidebar.multiselect(
+    "市場区分",
+    options=["プライム", "スタンダード", "グロース"],
+    default=["プライム", "スタンダード", "グロース"]
+)
+
+codes_df = codes_df[codes_df["市場区分"].isin(market_filters)]
+
+# セクターフィルタ
+selected_sector = st.sidebar.selectbox(
+    "セクター（セクター内分析用）",
+    options=["全体"] + sorted(codes_df["セクター"].unique().tolist())
+)
 
 # =========================
 # 株価データ取得
 # =========================
-st.header("株価データ取得")
+st.header("② 株価データ取得")
 
-if st.button("60日分の株価データを取得"):
-    progress = st.progress(0.0)
-    status = st.empty()
+price_data = []
 
-    all_rows = []
-    total = len(code_df)
-
-    for i, row in enumerate(code_df.itertuples(), 1):
-        code = row.銘柄コード
-        ticker = f"{code}.T"
-        status.text(f"{ticker} 取得中... ({i}/{total})")
-
-        try:
-            df = yf.download(
-                ticker,
-                period=PERIOD,
-                interval="1d",
-                auto_adjust=True,
-                progress=False,
-                threads=False
-            )
-
-            if df.empty or "Close" not in df.columns:
-                continue
-
-            df = df.reset_index()
-            df["Code"] = code
-            df["Sector"] = row.セクター
-            df["Market"] = row.市場区分
-
-            df = df[["Date", "Code", "Sector", "Market", "Close", "Volume"]]
-            all_rows.append(df)
-
-            time.sleep(0.2)  # RateLimit対策
-
-        except Exception:
+with st.spinner("株価データ取得中..."):
+    for _, row in codes_df.iterrows():
+        df = load_price(row["銘柄コード"])
+        if df is None:
             continue
 
-        progress.progress(i / total)
+        df["Name"] = row["銘柄名"]
+        df["Sector"] = row["セクター"]
+        df["Market"] = row["市場区分"]
 
-    progress.empty()
-    status.empty()
+        price_data.append(df)
 
-    if not all_rows:
-        st.error("株価データを取得できませんでした")
-        st.stop()
-
-    price_df = pd.concat(all_rows, ignore_index=True)
-    price_df.to_csv(PRICE_FILE, index=False, encoding="utf-8-sig")
-
-    st.success("すべての銘柄の株価データ取得が完了しました")
-
-# =========================
-# 株価CSV読み込み（重要修正版）
-# =========================
-if not os.path.exists(PRICE_FILE):
-    st.warning("株価CSVがまだ存在しません。上のボタンから取得してください。")
+if not price_data:
+    st.error("株価データを取得できませんでした")
     st.stop()
 
-price_df = pd.read_csv(PRICE_FILE)
+price_df = pd.concat(price_data)
 
-# 型の正規化（最重要）
-price_df["Date"] = pd.to_datetime(price_df["Date"], errors="coerce")
-price_df["Close"] = pd.to_numeric(price_df["Close"], errors="coerce")
-price_df["Volume"] = pd.to_numeric(price_df["Volume"], errors="coerce")
-
-price_df = price_df.dropna(subset=["Date", "Close"])
+# =========================
+# 指標計算
+# =========================
 price_df = price_df.sort_values(["Code", "Date"])
 
-# 騰落率
+# ROC
 price_df["ROC"] = price_df.groupby("Code")["Close"].pct_change()
 
-# =========================
-# セクター比較分析
-# =========================
-st.header("セクター比較分析")
-
-if st.button("セクター比較分析を実行"):
-    results = []
-
-    for sector in price_df["Sector"].unique():
-        df_sector = price_df[price_df["Sector"] == sector]
-
-        for window in [5, 20, 60]:
-            tmp = df_sector.groupby("Code").tail(window)
-            mean_roc = tmp.groupby("Code")["ROC"].mean().mean()
-            slope, r2 = calc_trend_r2(tmp.groupby("Date")["ROC"].mean())
-
-            results.append({
-                "セクター": sector,
-                "期間(日)": window,
-                "平均騰落率": mean_roc,
-                "トレンド傾き": slope,
-                "決定係数(R2)": r2
-            })
-
-    st.success("セクター比較分析が完了しました")
-    st.dataframe(pd.DataFrame(results), use_container_width=True)
+# 出来高変化率
+price_df["Volume_MA"] = (
+    price_df.groupby("Code")["Volume"]
+    .rolling(5).mean().reset_index(level=0, drop=True)
+)
+price_df["Volume_Rate"] = price_df["Volume"] / price_df["Volume_MA"]
 
 # =========================
 # セクター内分析
 # =========================
-st.header("セクター内分析")
+st.header("③ セクター内分析")
 
-sector_sel = st.selectbox(
-    "セクター選択",
-    sorted(price_df["Sector"].dropna().unique())
-)
-
-markets = st.multiselect(
-    "市場区分",
-    ["プライム", "スタンダード", "グロース"],
-    default=["プライム", "スタンダード", "グロース"]
-)
-
-if st.button("セクター内分析を実行"):
-    df = price_df[
-        (price_df["Sector"] == sector_sel) &
-        (price_df["Market"].isin(markets))
-    ]
+if selected_sector != "全体":
+    sector_df = price_df[price_df["Sector"] == selected_sector]
 
     results = []
 
-    for code, g in df.groupby("Code"):
-        g = g.sort_values("Date")
+    for code in sector_df["Code"].unique():
+        df_code = sector_df[sector_df["Code"] == code]
 
         for window in [5, 20, 60]:
-            roc = g["ROC"].tail(window)
-            slope, r2 = calc_trend_r2(roc)
+            tmp = df_code.tail(window)
 
-            vol_ratio = np.nan
-            if len(g) >= 5:
-                vol_ratio = g["Volume"].iloc[-1] / g["Volume"].iloc[-5:-1].mean()
+            slope, r2 = calc_trend_r2(tmp["ROC"])
 
             results.append({
                 "銘柄コード": code,
-                "期間(日)": window,
-                "平均騰落率": roc.mean(),
-                "トレンド傾き": slope,
-                "決定係数(R2)": r2,
-                "出来高変化率": vol_ratio
+                "銘柄名": tmp["Name"].iloc[-1],
+                "期間": f"{window}日",
+                "移動平均": tmp["ROC"].mean(),
+                "相対強度": slope,
+                "決定係数": r2,
+                "出来高変化率": tmp["Volume_Rate"].iloc[-1]
             })
 
-    st.success("セクター内分析が完了しました")
-    st.dataframe(pd.DataFrame(results), use_container_width=True)
+    sector_analysis_df = pd.DataFrame(results)
+    st.dataframe(sector_analysis_df, use_container_width=True)
 
+# =========================
+# セクター比較分析（1セクター1行）
+# =========================
+st.header("④ セクター比較分析")
+
+if st.button("セクター比較分析を実行"):
+    results = []
+
+    for sector in price_df["Sector"].dropna().unique():
+        df_sector = price_df[price_df["Sector"] == sector]
+
+        row = {"セクター": sector}
+
+        for window in [5, 20, 60]:
+            tmp = df_sector.groupby("Code").tail(window)
+
+            ma = tmp.groupby("Code")["ROC"].mean().mean()
+            sector_roc_ts = tmp.groupby("Date")["ROC"].mean()
+
+            slope, r2 = calc_trend_r2(sector_roc_ts)
+
+            row[f"{window}日間移動平均"] = ma
+            row[f"{window}日間相対強度"] = slope
+            row[f"{window}日間決定係数"] = r2
+
+        results.append(row)
+
+    sector_compare_df = pd.DataFrame(results)
+    st.dataframe(sector_compare_df, use_container_width=True)
+
+    st.success("セクター比較分析が完了しました")
