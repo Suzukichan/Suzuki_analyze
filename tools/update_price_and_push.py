@@ -1,79 +1,83 @@
-import tkinter as tk
-from tkinter import messagebox
-import subprocess
+import threading
 import sys
-import os
+from pathlib import Path
+import tkinter as tk
+from tkinter import ttk, messagebox
 
-PROJECT_DIR = os.path.abspath(os.path.dirname(__file__) + "/..")
+# ===== パス解決（最重要） =====
+TOOLS_DIR = Path(__file__).resolve().parent
+ROOT_DIR = TOOLS_DIR.parent
 
-def run_command(cmd):
-    result = subprocess.run(
-        cmd,
-        cwd=PROJECT_DIR,
-        shell=True,
-        text=True,
-        capture_output=True
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr)
-    return result.stdout
+sys.path.append(str(ROOT_DIR))
 
-def execute_all():
+from tools.fetch_price import fetch_price_csv
+from tools.git_utils import git_commit_and_push
+
+CODE_CSV_PATH = TOOLS_DIR / "stock_codes.csv"
+OUTPUT_CSV_PATH = ROOT_DIR / "tse_price_60days.csv"
+
+
+def run_process(progress, status_var, run_button):
     try:
-        status.set("① 株価データ取得中...")
-        root.update()
+        run_button.config(state="disabled")
+        status_var.set("株価データ取得中...")
 
-        run_command(f"{sys.executable} fetch_price.py")
+        def progress_callback(value):
+            progress["value"] = value
+            progress.update()
 
-        status.set("② Git commit 中...")
-        root.update()
-
-        run_command("git add tse_price_60days.csv")
-        run_command('git commit -m "update price csv"')
-
-        status.set("③ GitHub に push 中...")
-        root.update()
-
-        run_command("git push")
-
-        status.set("完了")
-        messagebox.showinfo(
-            "完了",
-            "株価CSVの生成とGitHubへのpushが完了しました"
+        fetch_price_csv(
+            code_csv_path=str(CODE_CSV_PATH),
+            output_csv_path=str(OUTPUT_CSV_PATH),
+            progress_callback=progress_callback,
         )
+
+        status_var.set("GitHub に commit & push 中...")
+        progress["value"] = 90
+
+        git_commit_and_push(
+            repo_dir=ROOT_DIR,
+            message="Update stock price CSV"
+        )
+
+        progress["value"] = 100
+        status_var.set("完了しました")
+        messagebox.showinfo("完了", "CSV更新とGitHub反映が完了しました")
 
     except Exception as e:
         messagebox.showerror("エラー", str(e))
-        status.set("エラー")
 
-# =========================
-# GUI
-# =========================
-root = tk.Tk()
-root.title("株価CSV更新ツール")
-root.geometry("420x180")
+    finally:
+        run_button.config(state="normal")
+        progress["value"] = 0
 
-label = tk.Label(
-    root,
-    text="株価CSVを更新してGitHubに反映します",
-    font=("Meiryo", 11)
-)
-label.pack(pady=10)
 
-btn = tk.Button(
-    root,
-    text="実行（CSV生成 → commit → push）",
-    font=("Meiryo", 11),
-    height=2,
-    width=30,
-    command=execute_all
-)
-btn.pack(pady=10)
+def start():
+    root = tk.Tk()
+    root.title("株価CSV更新ツール")
+    root.geometry("420x200")
 
-status = tk.StringVar()
-status.set("待機中")
+    ttk.Label(root, text="株価データ更新 & GitHub Push", font=("Meiryo", 12, "bold")).pack(pady=10)
 
-status_label = tk.Label(root, textvariable=status)
-status_label.pack(pady=5)
+    status_var = tk.StringVar(value="待機中")
+    ttk.Label(root, textvariable=status_var).pack(pady=5)
 
-root.mainloop()
+    progress = ttk.Progressbar(root, length=350, mode="determinate")
+    progress.pack(pady=5)
+
+    run_button = ttk.Button(
+        root,
+        text="実行（CSV生成 → commit → push）",
+        command=lambda: threading.Thread(
+            target=run_process,
+            args=(progress, status_var, run_button),
+            daemon=True
+        ).start()
+    )
+    run_button.pack(pady=10)
+
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    start()
