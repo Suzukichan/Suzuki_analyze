@@ -17,13 +17,13 @@ def fetch_price_csv(
     codes_df = pd.read_csv(code_csv_path)
 
     # 必須カラムチェック
-    required_cols = ["銘柄コード", "銘柄名", "市場区分", "セクター", "有効"]
+    required_cols = ["code", "name", "market", "sector", "active"]
     for col in required_cols:
         if col not in codes_df.columns:
             raise ValueError(f"CSVに必須カラムがありません: {col}")
 
     # 有効銘柄のみ
-    codes_df = codes_df[codes_df["有効"] == 1]
+    codes_df = codes_df[codes_df["active"] == 1]
 
     end_date = datetime.today()
     start_date = end_date - timedelta(days=days * 2)
@@ -32,9 +32,9 @@ def fetch_price_csv(
     total = len(codes_df)
 
     for idx, row in codes_df.iterrows():
-        code = str(row["銘柄コード"])
-        name = row["銘柄名"]
-        sector = row["セクター"]
+        code = str(row["code"])
+        name = row["name"]
+        sector = row["sector"]
 
         ticker = f"{code}.T"
 
