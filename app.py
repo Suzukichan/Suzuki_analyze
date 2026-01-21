@@ -16,8 +16,8 @@ st.title("株価分析アプリ")
 # 定数
 # =========================
 CODE_FILE = "銘柄リスト.csv"
-PRICE_FILE = "tse_price_60days.csv"
-PERIOD = "90d"
+PRICE_FILE = "stock_close_all.csv"
+PERIOD = "60d"
 
 # =========================
 # 共通関数
@@ -42,69 +42,43 @@ code_name_map = dict(
     zip(code_df["銘柄コード"], code_df["銘柄名"])
 )
 
-# =========================
-# 株価データ取得
-# =========================
-st.header("① 株価データ取得")
-
-if st.button("株価データを取得（90日）"):
-    rows = []
-
-    for _, row in code_df.iterrows():
-        code = row["銘柄コード"]
-        ticker = f"{code}.T"
-
-        try:
-            df = yf.download(
-                ticker,
-                period=PERIOD,
-                interval="1d",
-                auto_adjust=True,
-                progress=False
-            )
-
-            if df.empty:
-                continue
-
-            df = df.reset_index()
-            df["Code"] = code
-            df["Sector"] = row["セクター"]
-            df["Market"] = row["市場区分"]
-
-            df = df[["Date", "Code", "Sector", "Market", "Close", "Volume"]]
-            rows.append(df)
-
-        except Exception:
-            continue
-
-        time.sleep(0.05)
-
-    price_df = pd.concat(rows, ignore_index=True)
-    price_df.to_csv(PRICE_FILE, index=False, encoding="utf-8-sig")
-    st.success("株価データ取得完了")
 
 # =========================
 # 株価CSV読み込み
 # =========================
-price_df = pd.read_csv(PRICE_FILE)
+if os.path.exists(PRICE_FILE):
+    required_cols = ["Date", "Code", "Sector", "Market", "Close", "Volume"]
+    #Date,Code,Sector,Market,Close,Volume
+    try:
+        price_df = pd.read_csv(PRICE_FILE, encoding="utf-8-sig")
+        # 必要なカラムが存在するかチェック
+        if not set(required_cols).issubset(price_df.columns):
+            st.error("CSVファイルの形式が不正、または必要な列が不足しています。再取得してください。")
+            price_df = pd.DataFrame(columns=required_cols)
+        else:
+            price_df["Date"] = pd.to_datetime(price_df["Date"], errors="coerce")
+            price_df["Code"] = price_df["Code"].astype(str)
+            
+            # 数値変換（エラー回避）
+            price_df["Close"] = pd.to_numeric(price_df["Close"], errors="coerce")
+            price_df["Volume"] = pd.to_numeric(price_df["Volume"], errors="coerce")
+            
+            price_df = price_df.dropna(subset=["Date", "Close", "Volume"])
+            price_df = price_df.sort_values(["Code", "Date"])
+            
+            # 騰落率
+            price_df["ROC"] = price_df.groupby("Code")["Close"].pct_change()
 
-price_df["Date"] = pd.to_datetime(price_df["Date"], errors="coerce")
-price_df["Code"] = price_df["Code"].astype(str)
-
-# ★★★ ここが今回の修正の核心 ★★★
-price_df["Close"] = pd.to_numeric(price_df["Close"], errors="coerce")
-price_df["Volume"] = pd.to_numeric(price_df["Volume"], errors="coerce")
-
-price_df = price_df.dropna(subset=["Date", "Close", "Volume"])
-price_df = price_df.sort_values(["Code", "Date"])
-
-# 騰落率
-price_df["ROC"] = price_df.groupby("Code")["Close"].pct_change()
+    except Exception as e:
+        st.error(f"ファイル読み込みエラー: {e}")
+        price_df = pd.DataFrame(columns=required_cols)
+else:
+    price_df = pd.DataFrame(columns=["Date", "Code", "Sector", "Market", "Close", "Volume"])
 
 # =========================
 # セクター比較分析
 # =========================
-st.header("② セクター比較")
+st.header("① セクター比較")
 
 if st.button("セクター比較を実行"):
     results = []
@@ -131,7 +105,7 @@ if st.button("セクター比較を実行"):
 # =========================
 # セクター内分析
 # =========================
-st.header("③ セクター内分析")
+st.header("② セクター内分析")
 
 sector_sel = st.selectbox(
     "セクター選択",
